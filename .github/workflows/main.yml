@@ -1,52 +1,71 @@
 name: Build and Publish Docker Image
 
+# 工作流永久存在，不会自动停、不会自动删。除非手动删除这个 yml 文件并提交、整个仓库被删除、分支被删除，且该文件只存在这个分支。Actions 页面里每一次运行记录，公开仓库：默认保留 90 天，到期自动删除日志与运行记录；私有仓库：最长可设置 400 天，默认 90 天，文件本体不受影响，只是历史运行日志清空，yml 配置还在。 Artifact 构建产物（流水线上传的文件包） 90 天自动清理。
 # 触发条件：当你推送到 main 分支，或者手动点击运行按钮时触发
 on:
+  # push 到 main 分支自动执行：代码合并 / 提交到主分支就自动构建镜像
   push:
     branches: [ "main" ]
+  # 在 GitHub 页面手动点击按钮触发，适合测试、重新打包
   workflow_dispatch:
 
+# 全局环境变量
 env:
+  # 指定镜像仓库地址，GHCR 是 GitHub 官方容器仓库
   REGISTRY: ghcr.io
   # github.repository 会自动获取你的仓库名，即 zzzhhh1/Sing-Flare-Auto
   IMAGE_NAME: ${{ github.repository }}
+  # 强制官方 Actions 使用 Node24 运行，规避旧 Node 版本兼容报错
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # 整个 job 生命周期内，runner 机器不销毁，文件持久存在
   build-and-push-image:
+    # GitHub 提供的最新 Ubuntu 云虚拟机。只活一个 job 的时间，跑完整机销毁。要保留到Actions Artifact（保留90天或多少，有限制）的文件，要用uses: actions/upload-artifact@v4上传。
     runs-on: ubuntu-latest
     
-    # 赋予 Action 推送镜像到 ghcr.io 的权限
+    # 赋予 Action 推送镜像到 ghcr.io 的权限。给本次流水线内置的 GITHUB_TOKEN 授权，无需手动创建 Token，GitHub 每次运行 workflow 自动生成临时令牌。
     permissions:
+      # 读取仓库代码（拉取源码必备）
       contents: read
+      # 写入容器包权限，没有这个权限会推送镜像到 ghcr.io 403 报错
       packages: write
 
+    # 顺序执行，共享同一个文件系统、同一个 docker 环境
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository # 步骤显示名称（随便写，给人看）
+        uses: actions/checkout@v4 # 复用第三方 / 官方封装好的 Action（预制脚本），格式：仓库地址@版本号。官方维护的 Docker 系列 Action，用于拉代码工具。uses=xxx@v3 等价于：流水线临时拉取 docker/login-action 这个仓库里的自动化脚本，在当前 runner（ubuntu 虚拟机）执行。不用你自己写 docker login 一长串命令，别人封装好逻辑，你只用 with 传参配置。
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        with:
+        uses: docker/login-action@v3 # 官方维护的 Docker 系列 Action，用于 docker 登录工具。登录凭证一般保存在 ~/.docker/config.json 文件，后面的步骤可以用。
+        # 给这个Action传配置参数，可选
+        with: 
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
+          # 当前触发流水线的用户名
+          username: ${{ github.actor }} 
           # 这里的 GITHUB_TOKEN 是 GitHub 自动提供的，不需要你手动去设置 Secret！
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v5 # 官方维护的 Docker 系列 Action，用于自动生成镜像 tag
         with:
+          # 以 images 作为基础前缀,循环读取你配置的多条 tags 规则，拼接成完整镜像标识。本代码得到两条，如：ghcr.io/zzzhhh1/Sing-Flare-Auto:latest，ghcr.io/zzzhhh1/Sing-Flare-Auto:sha-a1b2c3d。把拼接好的全部标签放到输出变量 steps.meta.outputs.tags，供后面 build-push 使用
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # 自动打上 latest 标签，以及每次提交的简短哈希值作为版本号
           tags: |
+            # 固定打 latest 标签，main 分支每次构建都会覆盖 latest，摘取镜像时，Docker CLI 的底层逻辑决定。
             type=raw,value=latest
+            # 用 Git 提交短哈希作为版本标签，例如 sha-xxxxxxx 。摘取镜像时，Docker CLI 指定版本用。
             type=sha
 
+      # 拉取 “最新” 完全靠两条规则共同实现：1 人为流水线每次构建都覆盖 latest；2 Docker CLI 拉取缺省时默认找 latest。
+      # 一次构建只会生成一份镜像文件，只是给同一个镜像打上两个名字（tag），不是两份独立镜像，GHCR 只会存一份实体，多 tag 只是别名，不占用双倍存储空间。
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v5 # 官方维护的 Docker 系列 Action，用于构建 + 推送镜像
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          # docker/metadata-action 只要填了 images，默认自动生成一整套标准 OCI 镜像标签。也可以自己增加一些。
+          labels: ${{ steps.meta.outputs.labels }} 
