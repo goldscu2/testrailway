@@ -1,3 +1,4 @@
+# Alpine 轻量 Linux，体积极小，自带 apk 包管理器，适合做容器服务。
 FROM alpine:latest
 
 # 设置版本变量，方便以后维护
@@ -9,6 +10,7 @@ ARG CLOUDFLARED_VERSION=latest
 # 安装必要的下载工具和基础库
 RUN apk add --no-cache ca-certificates bash wget tar
 
+# 容器内默认工作目录 /app，后续复制配置、执行脚本都在这里。
 WORKDIR /app
 
 # 1. 下载并安装 sing-box (对应你的 web-app)
@@ -21,7 +23,7 @@ RUN wget https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERS
 # 2. 下载并安装 cloudflared (对应你的 sys-service)
 RUN wget -O /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/${CLOUDFLARED_VERSION}/download/cloudflared-linux-amd64
 
-# 3. 复制你仓库里现有的配置文件 (config.json, start.sh 等)
+# 3. 复制你仓库里现有的配置文件 (config.json, start.sh 等)到容器 /app
 COPY . .
 
 # 4. 赋予执行权限
@@ -29,7 +31,7 @@ RUN chmod +x /usr/local/bin/sing-box && \
     chmod +x /usr/local/bin/cloudflared && \
     chmod +x start.sh
 
-# 声明端口
+# 声明端口。只是标注程序内部监听 8080，不会自动宿主机端口映射，运行容器时需要 -p 或靠 cloudflared 隧道暴露公网。
 EXPOSE 8080
 
 # 启动脚本
